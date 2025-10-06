@@ -1,29 +1,75 @@
-from pathlib import Path
-import os
+"""
+Configuration file for Macro Regime Duration Project
+Adjust parameters here to customize the analysis
+"""
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_RAW = PROJECT_ROOT / "data" / "raw"
-DATA_PROC = PROJECT_ROOT / "data" / "processed"
-OUTPUT_FIGS = PROJECT_ROOT / "output" / "figures"
-OUTPUT_TABLES = PROJECT_ROOT / "output" / "tables"
-OUTPUT_RESULTS = PROJECT_ROOT / "output" / "results"
-
-FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-
-MARKOV_STATES = 3
-NS_TAU = 30.0
-VAR_LAGS = 2
-
-REBAL_FREQ = "M"
-TARGET_DURATION_RANGE = (5.0, 8.0)
-MAX_WEIGHT = 0.40
-TURNOVER_PENALTY = 0.001
-
-UNIVERSE = {
-    "UST_2Y": 2.0,
-    "UST_5Y": 5.0,
-    "UST_10Y": 10.0,
-    "UST_30Y": 20.0,
+# Data Collection Parameters
+DATA_CONFIG = {
+    'start_date': '1990-01-01',
+    'fred_api_key': None,  # Will be loaded from .env file
 }
 
-BENCHMARK = "Duration_Matched"
+# Regime Model Parameters
+REGIME_CONFIG = {
+    'n_regimes': 3,  # Number of regimes (2 or 3 recommended)
+    'dependent_var': 'gdp_growth',  # Main variable for regime-switching
+    'exog_vars': ['inflation', 'unemployment'],  # Additional variables
+    'switching_variance': True,  # Allow variance to differ by regime
+}
+
+# Yield Curve Model Parameters
+YIELD_CURVE_CONFIG = {
+    'var_lags': 2,  # Number of lags in VAR model
+    'forecast_horizon': 6,  # Months ahead to forecast
+    'lambda_init': 0.0609,  # Initial Nelson-Siegel decay parameter
+    'maturities': ['2Y', '5Y', '10Y', '30Y'],  # Key maturities to analyze
+}
+
+# Portfolio Optimization Parameters
+PORTFOLIO_CONFIG = {
+    'universe': ['2Y', '5Y', '10Y', '30Y'],  # Investable universe
+    'durations': {
+        '2Y': 1.9,
+        '5Y': 4.5,
+        '10Y': 8.5,
+        '30Y': 18.0
+    },
+    'target_duration': 6.0,  # Base duration target
+    'duration_tolerance': 2.0,  # +/- tolerance
+    'max_weight': 0.5,  # Maximum position size
+    'risk_aversion': 2.0,  # Risk aversion parameter (lambda)
+    'rebalance_freq': 1,  # Rebalance frequency in months
+    'lookback_window': 120,  # Historical window for statistics (months)
+}
+
+# Backtest Parameters
+BACKTEST_CONFIG = {
+    'start_date': '2005-01-01',  # When to start backtest
+    'transaction_costs': 0.0,  # Per-trade cost (as % of position)
+}
+
+# Output Paths
+PATHS = {
+    'data_raw': 'data/raw',
+    'data_processed': 'data/processed',
+    'output_figures': 'output/figures',
+    'output_tables': 'output/tables',
+    'output_results': 'output/results',
+    'paper': 'paper',
+}
+
+# Visualization Settings
+VIZ_CONFIG = {
+    'figure_size': (14, 10),
+    'dpi': 300,
+    'style': 'seaborn-v0_8-darkgrid',
+    'color_palette': 'husl',
+}
+
+# Paper/Report Settings
+PAPER_CONFIG = {
+    'title': 'Macro Regimes and Treasury Curve Positioning: A Quantitative Framework',
+    'author': 'Matteo Craviotto',
+    'date': 'October 2025',
+    'format': 'pdf',  # 'pdf' or 'docx'
+}
