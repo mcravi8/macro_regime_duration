@@ -9,3 +9,5 @@ output/
 paper/final_paper.pdf
 presentation/slides.pptx
 presentation/slides.pdf
+.DS_Store
+.idea/
