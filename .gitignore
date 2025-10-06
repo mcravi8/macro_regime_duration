@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+.env
+data/raw/
+data/processed/
+output/
+paper/final_paper.pdf
+presentation/slides.pptx
+presentation/slides.pdf
