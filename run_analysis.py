@@ -6,46 +6,52 @@ Executes the complete analysis pipeline
 import sys
 from pathlib import Path
 import warnings
+import pandas as pd
 warnings.filterwarnings('ignore')
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
 
 from src.data_collection.collect_data import DataCollector
-from src.regime_model.regime_model import RegimeModel
+from src.regime_model.model import RegimeModel
 from src.yield_curve.yield_curve_model import YieldCurveModel
 from src.portfolio_opt.portfolio_optimization import PortfolioOptimizer
 import config
 
+
+# =====================================================================
+# FULL PIPELINE EXECUTION
+# =====================================================================
 def run_full_pipeline():
     """Execute complete analysis pipeline"""
-    
+
     print("\n" + "="*80)
     print(" "*20 + "MACRO REGIME DURATION PROJECT")
     print(" "*15 + "Complete Analysis Pipeline Execution")
     print("="*80)
-    
-    # Step 1: Data Collection
+
+    # ------------------------------------------------------------
+    # STEP 1: DATA COLLECTION
+    # ------------------------------------------------------------
     print("\n" + "─"*80)
     print("STEP 1/4: DATA COLLECTION")
     print("─"*80)
-    
+
     try:
         collector = DataCollector()
-        datasets = collector.save_all_data(output_dir=config.PATHS['data_raw'])
+        collector.save_all_data(output_dir=config.PATHS['data_raw'])
         print("✓ Data collection successful")
     except Exception as e:
         print(f"✗ Data collection failed: {e}")
-        print("\nPlease ensure:")
-        print("1. You have a FRED API key in .env file")
-        print("2. Internet connection is active")
         return False
-    
-    # Step 2: Regime Model
+
+    # ------------------------------------------------------------
+    # STEP 2: REGIME IDENTIFICATION
+    # ------------------------------------------------------------
     print("\n" + "─"*80)
     print("STEP 2/4: REGIME IDENTIFICATION")
     print("─"*80)
-    
+
     try:
         regime_model = RegimeModel(n_regimes=config.REGIME_CONFIG['n_regimes'])
         regime_model.prepare_data(data_path=f"{config.PATHS['data_raw']}/macro_data.csv")
@@ -67,38 +73,42 @@ def run_full_pipeline():
         import traceback
         traceback.print_exc()
         return False
-    
-    # Step 3: Yield Curve Model
+
+    # ------------------------------------------------------------
+    # STEP 3: YIELD CURVE MODELING
+    # ------------------------------------------------------------
     print("\n" + "─"*80)
     print("STEP 3/4: YIELD CURVE MODELING")
     print("─"*80)
-    
+
     try:
-        yc_model = YieldCurveModel()
-        yc_model.load_data(
-            yields_path=f"{config.PATHS['data_raw']}/treasury_yields.csv",
-            regime_path=f"{config.PATHS['data_processed']}/regime_probabilities.csv"
+        # Load processed inputs
+        yields = pd.read_csv(
+            f"{config.PATHS['data_raw']}/treasury_yields.csv", index_col=0, parse_dates=True
         )
-        yc_model.extract_factors()
+        regimes = pd.read_csv(
+            f"{config.PATHS['data_processed']}/regime_probabilities.csv", index_col=0, parse_dates=True
+        )
+
+        yc_model = YieldCurveModel(yield_data=yields, regime_probs=regimes)
+        yc_model.extract_ns_factors()
         yc_model.estimate_var(lags=config.YIELD_CURVE_CONFIG['var_lags'])
-        yc_model.forecast_factors(steps=config.YIELD_CURVE_CONFIG['forecast_horizon'])
-        yc_model.calculate_expected_returns()
-        yc_model.plot_factors(
-            save_path=f"{config.PATHS['output_figures']}/ns_factors.png"
-        )
-        yc_model.save_results(output_dir=config.PATHS['data_processed'])
+        yc_model.forecast_next(steps=config.YIELD_CURVE_CONFIG['forecast_horizon'])
         print("✓ Yield curve modeling successful")
+
     except Exception as e:
         print(f"✗ Yield curve modeling failed: {e}")
         import traceback
         traceback.print_exc()
         return False
-    
-    # Step 4: Portfolio Optimization
+
+    # ------------------------------------------------------------
+    # STEP 4: PORTFOLIO OPTIMIZATION
+    # ------------------------------------------------------------
     print("\n" + "─"*80)
     print("STEP 4/4: PORTFOLIO OPTIMIZATION & BACKTESTING")
     print("─"*80)
-    
+
     try:
         optimizer = PortfolioOptimizer()
         optimizer.load_data(
@@ -120,91 +130,95 @@ def run_full_pipeline():
         import traceback
         traceback.print_exc()
         return False
-    
-    # Summary
+
+    # ------------------------------------------------------------
+    # SUMMARY
+    # ------------------------------------------------------------
     print("\n" + "="*80)
     print(" "*25 + "ANALYSIS COMPLETE!")
     print("="*80)
-    
+
     print("\nResults saved to:")
     print(f"  📊 Figures: {config.PATHS['output_figures']}/")
     print(f"  📁 Data: {config.PATHS['data_processed']}/")
-    
-    print("\nNext steps:")
-    print("  1. Review visualizations in output/figures/")
-    print("  2. Examine detailed results in data/processed/")
-    print("  3. Write research paper using insights and figures")
-    print("  4. Create presentation deck for interviews")
-    
+
     return True
 
+
+# =====================================================================
+# INDIVIDUAL STEP RUNNERS
+# =====================================================================
 def run_data_only():
-    """Run only data collection step"""
     print("\nRunning data collection only...")
     collector = DataCollector()
     collector.save_all_data(output_dir=config.PATHS['data_raw'])
-    print("\n✓ Data collection complete")
+    print("✓ Data collection complete")
+
 
 def run_regime_only():
-    """Run only regime modeling step"""
     print("\nRunning regime modeling only...")
     regime_model = RegimeModel(n_regimes=config.REGIME_CONFIG['n_regimes'])
-    regime_model.prepare_data()
-    regime_model.estimate_model()
+    regime_model.prepare_data(data_path=f"{config.PATHS['data_raw']}/macro_data.csv")
+    regime_model.estimate_model(
+        dependent_var=config.REGIME_CONFIG['dependent_var'],
+        exog_vars=config.REGIME_CONFIG['exog_vars']
+    )
     regime_model.print_summary()
-    regime_model.plot_regime_probabilities()
-    regime_model.plot_regime_scatter()
-    regime_model.save_results()
-    print("\n✓ Regime modeling complete")
+    regime_model.save_results(output_dir=config.PATHS['data_processed'])
+    print("✓ Regime modeling complete")
+
 
 def run_yield_curve_only():
-    """Run only yield curve modeling step"""
     print("\nRunning yield curve modeling only...")
-    yc_model = YieldCurveModel()
-    yc_model.load_data()
-    yc_model.extract_factors()
+    yields = pd.read_csv("data/raw/treasury_yields.csv", index_col=0, parse_dates=True)
+    regimes = pd.read_csv("data/processed/regime_probabilities.csv", index_col=0, parse_dates=True)
+    yc_model = YieldCurveModel(yield_data=yields, regime_probs=regimes)
+    yc_model.extract_ns_factors()
     yc_model.estimate_var()
     yc_model.forecast_factors()
-    yc_model.calculate_expected_returns()
-    yc_model.plot_factors()
-    yc_model.save_results()
-    print("\n✓ Yield curve modeling complete")
+    print("✓ Yield curve modeling complete")
+
 
 def run_portfolio_only():
-    """Run only portfolio optimization step"""
     print("\nRunning portfolio optimization only...")
     optimizer = PortfolioOptimizer()
-    optimizer.load_data()
+    optimizer.load_data(
+        returns_path=f"{config.PATHS['data_raw']}/treasury_returns.csv",
+        regime_path=f"{config.PATHS['data_processed']}/regime_probabilities.csv"
+    )
     optimizer.backtest()
     optimizer.plot_performance()
     optimizer.save_results()
-    print("\n✓ Portfolio optimization complete")
+    print("✓ Portfolio optimization complete")
 
+
+# =====================================================================
+# CLI ENTRY POINT
+# =====================================================================
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(
-        description='Macro Regime Duration Project - Analysis Pipeline'
+        description="Macro Regime Duration Project - Analysis Pipeline"
     )
     parser.add_argument(
-        '--step',
+        "--step",
         type=str,
-        default='all',
-        choices=['all', 'data', 'regime', 'yield_curve', 'portfolio'],
-        help='Which step to run (default: all)'
+        default="all",
+        choices=["all", "data", "regime", "yield_curve", "portfolio"],
+        help="Which step to run (default: all)"
     )
-    
+
     args = parser.parse_args()
-    
-    # Run selected step
-    if args.step == 'all':
+
+    if args.step == "all":
         success = run_full_pipeline()
         sys.exit(0 if success else 1)
-    elif args.step == 'data':
+    elif args.step == "data":
         run_data_only()
-    elif args.step == 'regime':
+    elif args.step == "regime":
         run_regime_only()
-    elif args.step == 'yield_curve':
+    elif args.step == "yield_curve":
         run_yield_curve_only()
-    elif args.step == 'portfolio':
+    elif args.step == "portfolio":
         run_portfolio_only()
