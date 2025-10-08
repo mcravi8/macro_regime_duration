@@ -12,16 +12,16 @@ DATA_CONFIG = {
 # Regime Model Parameters
 REGIME_CONFIG = {
     'n_regimes': 3,  # Number of regimes (2 or 3 recommended)
-    'dependent_var': 'gdp_growth',  # Main variable for regime-switching
+    'dependent_var': 'gdp_growth',        # Main variable for regime-switching
     'exog_vars': ['inflation', 'unemployment'],  # Additional variables
-    'switching_variance': True,  # Allow variance to differ by regime
+    'switching_variance': True,           # Allow variance to differ by regime
 }
 
 # Yield Curve Model Parameters
 YIELD_CURVE_CONFIG = {
-    'var_lags': 2,  # Number of lags in VAR model
-    'forecast_horizon': 6,  # Months ahead to forecast
-    'lambda_init': 0.0609,  # Initial Nelson-Siegel decay parameter
+    'var_lags': 2,                  # Number of lags in VAR model
+    'forecast_horizon': 6,          # Months ahead to forecast
+    'lambda_init': 0.0609,          # Initial Nelson-Siegel decay parameter
     'maturities': ['2Y', '5Y', '10Y', '30Y'],  # Key maturities to analyze
 }
 
@@ -34,18 +34,18 @@ PORTFOLIO_CONFIG = {
         '10Y': 8.5,
         '30Y': 18.0
     },
-    'target_duration': 6.0,  # Base duration target
-    'duration_tolerance': 2.0,  # +/- tolerance
-    'max_weight': 0.5,  # Maximum position size
-    'risk_aversion': 2.0,  # Risk aversion parameter (lambda)
-    'rebalance_freq': 1,  # Rebalance frequency in months
-    'lookback_window': 120,  # Historical window for statistics (months)
+    'target_duration': 6.0,           # Base duration target
+    'duration_tolerance': 2.0,        # +/- tolerance
+    'max_weight': 0.5,                # Maximum position size
+    'risk_aversion': 2.0,             # Risk aversion parameter (lambda)
+    'rebalance_freq': 1,              # Rebalance frequency in months
+    'lookback_window': 120,           # Historical window for statistics (months) (unused in NumPy version)
 }
 
 # Backtest Parameters
 BACKTEST_CONFIG = {
-    'start_date': '2005-01-01',  # When to start backtest
-    'transaction_costs': 0.0,  # Per-trade cost (as % of position)
+    'start_date': '2005-01-01',  # When to start backtest (unused in NumPy version)
+    'transaction_costs': 0.0,    # Per-trade cost (as % of position)
 }
 
 # Output Paths
@@ -57,6 +57,10 @@ PATHS = {
     'output_results': 'output/results',
     'paper': 'paper',
 }
+
+# Files generated/consumed across steps
+VAR_FORECAST_FILE = "var_forecast.csv"        # produced by YieldCurveModel.forecast_next
+NEXT_ALLOC_FILE = "next_allocation.csv"       # produced by PortfolioOptimizer.suggest_next_allocation_from_var
 
 # Visualization Settings
 VIZ_CONFIG = {

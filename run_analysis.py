@@ -7,9 +7,10 @@ import sys
 from pathlib import Path
 import warnings
 import pandas as pd
+
 warnings.filterwarnings('ignore')
 
-# Add src to path
+# Make sure we can import from src/*
 sys.path.append(str(Path(__file__).parent))
 
 from src.data_collection.collect_data import DataCollector
@@ -60,12 +61,20 @@ def run_full_pipeline():
             exog_vars=config.REGIME_CONFIG['exog_vars']
         )
         regime_model.print_summary()
+
+        # Always produce plots for validation
         regime_model.plot_regime_probabilities(
             save_path=f"{config.PATHS['output_figures']}/regime_probabilities.png"
         )
         regime_model.plot_regime_scatter(
             save_path=f"{config.PATHS['output_figures']}/regime_scatter.png"
         )
+        # 4-panel figure with labeled regimes
+        if hasattr(regime_model, "plot_regime_panels"):
+            regime_model.plot_regime_panels(
+                save_path=f"{config.PATHS['output_figures']}/regime_panels.png"
+            )
+
         regime_model.save_results(output_dir=config.PATHS['data_processed'])
         print("✓ Regime modeling successful")
     except Exception as e:
@@ -91,8 +100,12 @@ def run_full_pipeline():
         )
 
         yc_model = YieldCurveModel(yield_data=yields, regime_probs=regimes)
-        yc_model.extract_ns_factors()
+        yc_model.extract_ns_factors(
+            maturities=[2, 5, 10, 30],
+            lambda_init=config.YIELD_CURVE_CONFIG.get('lambda_init', 0.0609)
+        )
         yc_model.estimate_var(lags=config.YIELD_CURVE_CONFIG['var_lags'])
+        # Statsmodels VAR uses last lags internally; our wrapper handles endog/y
         yc_model.forecast_next(steps=config.YIELD_CURVE_CONFIG['forecast_horizon'])
         print("✓ Yield curve modeling successful")
 
@@ -113,17 +126,18 @@ def run_full_pipeline():
         optimizer = PortfolioOptimizer()
         optimizer.load_data(
             returns_path=f"{config.PATHS['data_raw']}/treasury_returns.csv",
-            regime_path=f"{config.PATHS['data_processed']}/regime_probabilities.csv"
+            regime_path=f"{config.PATHS['data_processed']}/regime_probabilities.csv",
+            # Use the standard saved outputs (don’t rely on extra config keys)
+            forecast_path=f"{config.PATHS['data_processed']}/var_forecast.csv",
+            regime_labels_path=f"{config.PATHS['data_processed']}/regime_labels.csv",
         )
         optimizer.backtest(
-            rebalance_freq=config.PORTFOLIO_CONFIG['rebalance_freq'],
-            lookback=config.PORTFOLIO_CONFIG['lookback_window'],
-            start_date=config.BACKTEST_CONFIG['start_date']
+            rebalance_freq=config.PORTFOLIO_CONFIG['rebalance_freq']
         )
         optimizer.plot_performance(
-            save_path=f"{config.PATHS['output_figures']}/portfolio_performance.png"
+            path=f"{config.PATHS['output_figures']}/portfolio_performance.png"
         )
-        optimizer.save_results(output_dir=config.PATHS['data_processed'])
+        optimizer.save_results(outdir=config.PATHS['data_processed'])
         print("✓ Portfolio optimization successful")
     except Exception as e:
         print(f"✗ Portfolio optimization failed: {e}")
@@ -164,6 +178,19 @@ def run_regime_only():
         exog_vars=config.REGIME_CONFIG['exog_vars']
     )
     regime_model.print_summary()
+
+    # Always produce plots for validation
+    regime_model.plot_regime_probabilities(
+        save_path=f"{config.PATHS['output_figures']}/regime_probabilities.png"
+    )
+    regime_model.plot_regime_scatter(
+        save_path=f"{config.PATHS['output_figures']}/regime_scatter.png"
+    )
+    if hasattr(regime_model, "plot_regime_panels"):
+        regime_model.plot_regime_panels(
+            save_path=f"{config.PATHS['output_figures']}/regime_panels.png"
+        )
+
     regime_model.save_results(output_dir=config.PATHS['data_processed'])
     print("✓ Regime modeling complete")
 
@@ -173,9 +200,12 @@ def run_yield_curve_only():
     yields = pd.read_csv("data/raw/treasury_yields.csv", index_col=0, parse_dates=True)
     regimes = pd.read_csv("data/processed/regime_probabilities.csv", index_col=0, parse_dates=True)
     yc_model = YieldCurveModel(yield_data=yields, regime_probs=regimes)
-    yc_model.extract_ns_factors()
-    yc_model.estimate_var()
-    yc_model.forecast_factors()
+    yc_model.extract_ns_factors(
+        maturities=[2, 5, 10, 30],
+        lambda_init=config.YIELD_CURVE_CONFIG.get('lambda_init', 0.0609)
+    )
+    yc_model.estimate_var(lags=config.YIELD_CURVE_CONFIG['var_lags'])
+    yc_model.forecast_next(steps=config.YIELD_CURVE_CONFIG['forecast_horizon'])
     print("✓ Yield curve modeling complete")
 
 
@@ -184,11 +214,17 @@ def run_portfolio_only():
     optimizer = PortfolioOptimizer()
     optimizer.load_data(
         returns_path=f"{config.PATHS['data_raw']}/treasury_returns.csv",
-        regime_path=f"{config.PATHS['data_processed']}/regime_probabilities.csv"
+        regime_path=f"{config.PATHS['data_processed']}/regime_probabilities.csv",
+        forecast_path=f"{config.PATHS['data_processed']}/var_forecast.csv",
+        regime_labels_path=f"{config.PATHS['data_processed']}/regime_labels.csv",
     )
-    optimizer.backtest()
-    optimizer.plot_performance()
-    optimizer.save_results()
+    optimizer.backtest(
+        rebalance_freq=config.PORTFOLIO_CONFIG['rebalance_freq']
+    )
+    optimizer.plot_performance(
+        path=f"{config.PATHS['output_figures']}/portfolio_performance.png"
+    )
+    optimizer.save_results(outdir=config.PATHS['data_processed'])
     print("✓ Portfolio optimization complete")
 
 
@@ -197,6 +233,11 @@ def run_portfolio_only():
 # =====================================================================
 if __name__ == "__main__":
     import argparse
+
+    # Ensure output directories exist
+    Path(config.PATHS['output_figures']).mkdir(parents=True, exist_ok=True)
+    Path(config.PATHS['output_results']).mkdir(parents=True, exist_ok=True)
+    Path(config.PATHS['data_processed']).mkdir(parents=True, exist_ok=True)
 
     parser = argparse.ArgumentParser(
         description="Macro Regime Duration Project - Analysis Pipeline"

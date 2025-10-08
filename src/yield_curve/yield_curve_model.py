@@ -1,205 +1,275 @@
 """
-Yield Curve Modeling using Nelson–Siegel Factors and VAR
-Part of the Macro Regime Duration Project
+Yield Curve Modeling
+- Extracts Nelson–Siegel factors (Level, Slope, Curvature)
+- Fits VAR model on factors + regime probabilities
+- Forecasts next N months of yield curve evolution
 """
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from statsmodels.tsa.api import VAR
-from sklearn.linear_model import LinearRegression
-from pathlib import Path
+from __future__ import annotations
 import warnings
-from numpy.linalg import LinAlgError
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+from statsmodels.tsa.api import VAR
 
 warnings.filterwarnings("ignore")
 
 
 class YieldCurveModel:
-    def __init__(self, yield_data=None, regime_probs=None):
-        self.yield_data = yield_data
-        self.regime_probs = regime_probs
-        self.ns_factors = None
-        self.var_model = None
+    """
+    Orchestrates:
+      1) Nelson–Siegel factor extraction from Treasury yields
+      2) VAR(l) on [Level, Slope, Curvature] + regime probabilities
+      3) Multi-step forecast
+    """
+
+    def __init__(self, yield_data: pd.DataFrame, regime_probs: pd.DataFrame):
+        # Expect yield_data with columns that include: '2Y','5Y','10Y','30Y'
+        # Expect regime_probs with columns 'Regime_0', 'Regime_1', ...
+        self.yield_data = yield_data.copy()
+        self.regime_probs = regime_probs.copy()
+
+        # Artifacts
+        self.ns_factors: pd.DataFrame | None = None
         self.var_results = None
-        self.var_data = None
+        self.var_forecast: pd.DataFrame | None = None
 
-    # ============================================================
-    # STEP 1: LOAD DATA
-    # ============================================================
-    def load_data(self, yields_path, regime_path):
-        print("\n============================================================")
-        print("LOADING INPUT DATA")
-        print("============================================================")
+    # -------------------------------------------------------------------------
+    # 1) Nelson–Siegel extraction
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def _nelson_siegel(maturity, level, slope, curvature, tau=0.0609):
+        """
+        Nelson–Siegel functional form. 'maturity' is in years.
+        """
+        m = np.asarray(maturity, dtype=float)
+        term = (1.0 - np.exp(-m * tau)) / (m * tau)
+        return level + slope * (term - 1.0) + curvature * ((term - 1.0) * (m * tau))
 
-        self.yield_data = pd.read_csv(yields_path, index_col=0, parse_dates=True)
-        self.regime_probs = pd.read_csv(regime_path, index_col=0, parse_dates=True)
-
-        print(f"✓ Loaded yields: {self.yield_data.shape}")
-        print(f"✓ Loaded regimes: {self.regime_probs.shape}")
-
-    # ============================================================
-    # STEP 2: EXTRACT NELSON–SIEGEL FACTORS
-    # ============================================================
-    def extract_ns_factors(self):
-        print("\n============================================================")
+    def extract_ns_factors(self, maturities: list[int] | None = None, tau: float = 0.0609):
+        """
+        Fit the NS curve per date on selected maturities (default: 2,5,10,30Y).
+        Saves:
+          - data/processed/ns_factors.csv
+          - output/figures/ns_factors.png
+        """
+        print("\n" + "=" * 60)
         print("EXTRACTING NELSON–SIEGEL FACTORS")
-        print("============================================================")
+        print("=" * 60)
 
-        yields = self.yield_data.dropna(how="any").copy()
-        maturities = np.array([0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30])  # in years
-        tau = 1.5
+        if maturities is None:
+            maturities = [2, 5, 10, 30]
 
-        # Construct NS loadings
-        def ns_loadings(mats, tau):
-            x = mats / tau
-            L1 = (1 - np.exp(-x)) / x
-            L2 = L1 - np.exp(-x)
-            return np.column_stack([np.ones(len(mats)), L1, L2])
+        cols_needed = [f"{m}Y" for m in maturities]
+        missing = [c for c in cols_needed if c not in self.yield_data.columns]
+        if missing:
+            raise ValueError(
+                f"Yield data is missing required columns: {missing}. "
+                f"Available: {list(self.yield_data.columns)}"
+            )
 
-        X = ns_loadings(maturities, tau)
+        yld = (
+            self.yield_data
+            .copy()
+            .sort_index()
+            .loc[:, cols_needed]
+            .apply(pd.to_numeric, errors="coerce")
+            .dropna(how="any")
+        )
 
-        betas = []
-        for date, row in yields.iterrows():
-            y = row.values
-            if np.any(np.isnan(y)):
-                betas.append([np.nan, np.nan, np.nan])
+        maturities_arr = np.array(maturities, dtype=float)
+        rows = []
+
+        # Reasonable parameter bounds (in percent space)
+        bounds = ([-10.0, -15.0, -15.0], [15.0, 15.0, 15.0])
+
+        for dt, row in yld.iterrows():
+            yobs = row.values.astype(float)
+            # Initial guess: level ~ avg, slope negative, curvature small
+            p0 = [np.nanmean(yobs), -2.0, 1.0]
+            try:
+                popt, _ = curve_fit(
+                    lambda m, L, S, C: self._nelson_siegel(m, L, S, C, tau=tau),
+                    maturities_arr,
+                    yobs,
+                    p0=p0,
+                    bounds=bounds,
+                    maxfev=20000,
+                )
+                rows.append((dt, *popt))
+            except Exception:
+                # Skip date if fit fails
                 continue
 
-            try:
-                model = LinearRegression().fit(X, y)
-                betas.append(model.coef_)
-            except Exception:
-                betas.append([np.nan, np.nan, np.nan])
+        if not rows:
+            raise RuntimeError("Nelson–Siegel fitting failed for all dates.")
 
-        self.ns_factors = pd.DataFrame(
-            betas, index=yields.index, columns=["Level", "Slope", "Curvature"]
-        ).dropna()
+        ns = pd.DataFrame(rows, columns=["Date", "Level", "Slope", "Curvature"]).set_index("Date").sort_index()
+        self.ns_factors = ns
 
-        print(f"✓ Extracted factors for {len(self.ns_factors)} dates")
+        # Save CSV
+        out_csv = Path("data/processed/ns_factors.csv")
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        ns.to_csv(out_csv)
 
-        # Save
-        Path("data/processed").mkdir(parents=True, exist_ok=True)
-        self.ns_factors.to_csv("data/processed/ns_factors.csv")
-        plt.figure(figsize=(10, 6))
-        self.ns_factors.plot(ax=plt.gca(), title="Nelson–Siegel Factors")
+        # Plot -> output (so it’s easy to view from VSCode / browser)
+        fig_path = Path("output/figures/ns_factors.png")
+        fig_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.figure(figsize=(14, 5))
+        for col in ["Level", "Slope", "Curvature"]:
+            plt.plot(ns.index, ns[col], label=col)
+        plt.title("Nelson–Siegel Yield Curve Factors")
+        plt.xlabel("Date")
+        plt.ylabel("Factor Value")
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc="best")
         plt.tight_layout()
-        plt.savefig("data/processed/ns_factors.png")
+        plt.savefig(fig_path, dpi=300, bbox_inches="tight")
         plt.close()
-        print("✓ Saved to data/processed/ns_factors.csv")
-        print("✓ Saved factor plot: data/processed/ns_factors.png")
+        print(f"✓ Extracted factors for {len(ns):,} dates")
+        print(f"✓ Saved to {out_csv}")
+        print(f"✓ Saved factor plot: {fig_path}")
 
-    # ============================================================
-    # STEP 3: ESTIMATE VAR MODEL
-    # ============================================================
-    def estimate_var(self, lags=2):
-        print("\n============================================================")
+        return ns
+
+    # -------------------------------------------------------------------------
+    # 2) VAR estimation
+    # -------------------------------------------------------------------------
+    def estimate_var(self, lags: int = 2):
+        """
+        Fit VAR(lags) on [Level, Slope, Curvature] + monthly regime probabilities.
+        Writes a summary to data/processed/var_summary.txt (fallback if needed).
+        """
+        print("\n" + "=" * 60)
         print("ESTIMATING VAR MODEL")
-        print("============================================================")
+        print("=" * 60)
 
-        if self.ns_factors is None or self.regime_probs is None:
-            raise ValueError("NS factors and regime probabilities must be loaded first.")
+        if self.ns_factors is None or self.ns_factors.empty:
+            raise RuntimeError("Call extract_ns_factors() before estimate_var().")
 
-        # Align to monthly end-of-month data
-        f_factors = self.ns_factors.resample("M").last()
-        f_regime = self.regime_probs.resample("M").last()
-
-        common_idx = f_factors.index.intersection(f_regime.index)
-        f_factors = f_factors.loc[common_idx]
-        f_regime = f_regime.loc[common_idx]
-
-        # Select top 3 regime columns (probabilities only)
-        regime_cols = [c for c in f_regime.columns if "Regime" in c][:3]
-        df = pd.concat([f_factors, f_regime[regime_cols]], axis=1).dropna()
-
-        self.var_data = df
-        print(
-            f"  Factors span: {self.ns_factors.index.min().date()} -> {self.ns_factors.index.max().date()}"
+        # Monthly averaging and strict alignment
+        fac_m = self.ns_factors.asfreq("D").resample("M").mean()
+        reg_m = (
+            self.regime_probs
+            .copy()
+            .sort_index()
+            .asfreq("D")
+            .resample("M")
+            .mean()
         )
-        print(
-            f"  Regimes span: {self.regime_probs.index.min().date()} -> {self.regime_probs.index.max().date()}"
-        )
-        print(f"  Overlapping months: {len(common_idx)}")
-        print(f"✓ VAR dataset shape: {df.shape}")
 
-        if len(df) < 30:
+        # Only keep Regime_* columns
+        regime_cols = [c for c in reg_m.columns if c.startswith("Regime_")]
+        reg_m = reg_m[regime_cols]
+
+        start = max(fac_m.index.min(), reg_m.index.min())
+        end = min(fac_m.index.max(), reg_m.index.max())
+
+        df = fac_m.loc[start:end].join(reg_m.loc[start:end], how="inner").dropna(how="any")
+        print(f"  Factors span: {fac_m.index.min().date()} -> {fac_m.index.max().date()}")
+        print(f"  Regimes span: {reg_m.index.min().date()} -> {reg_m.index.max().date()}")
+        print(f"  Overlapping months (before lags): {len(df)}")
+
+        if len(df) <= lags + 5:
             raise ValueError("Not enough observations for VAR estimation after alignment.")
 
-        # Fit VAR
-        self.var_model = VAR(df)
-        self.var_results = self.var_model.fit(lags)
-        print(f"✓ VAR({lags}) fitted successfully")
+        print(f"✓ VAR dataset shape: {df.shape}")
 
-        # --- Stabilize covariance if needed
-        cov = self.var_results.sigma_u_mle
-        eigvals = np.linalg.eigvalsh(cov)
-        if np.any(eigvals <= 0):
-            jitter = abs(np.min(eigvals)) + 1e-6
-            self.var_results.sigma_u_mle += np.eye(cov.shape[0]) * jitter
-            print(f"⚙️ Added jitter {jitter:.2e} to stabilize covariance.")
-
-        # --- Info criteria (AIC/BIC)
         try:
-            aic = self.var_results.aic
-            bic = self.var_results.bic
-            print(f"  AIC: {aic:.2f}, BIC: {bic:.2f}")
-        except LinAlgError:
-            print("⚠️ Covariance not positive-definite — skipping AIC/BIC display.")
+            model = VAR(df)
+            res = model.fit(maxlags=lags, ic=None)
+            self.var_results = res
+            print(f"✓ VAR({res.k_ar}) fitted successfully")
 
-        # --- Save summary safely
-        Path("data/processed").mkdir(parents=True, exist_ok=True)
-        try:
-            with open("data/processed/var_summary.txt", "w") as f:
-                f.write(str(self.var_results.summary()))
-            print("✓ VAR summary saved to data/processed/var_summary.txt")
+            # Try to Cholesky the covariance; if it fails, log & continue.
+            try:
+                _ = np.linalg.cholesky(np.asarray(res.sigma_u))
+            except np.linalg.LinAlgError:
+                print("⚠️ Residual covariance not positive-definite; info criteria may fail.")
+
+            # Save a summary (with robust fallback)
+            out_txt = Path("data/processed/var_summary.txt")
+            out_txt.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(out_txt, "w") as f:
+                    f.write(str(res.summary()))
+                print(f"✓ Saved VAR summary: {out_txt}")
+            except Exception as e:
+                with open(out_txt, "w") as f:
+                    f.write("Fallback VAR summary\n")
+                    f.write(f"Variables: {list(df.columns)}\n")
+                    f.write(f"Observations: {len(df)}\n")
+                    f.write(f"Lags: {res.k_ar}\n")
+                print(f"⚠️ Full summary generation failed ({e}); wrote fallback instead.")
+
         except Exception as e:
-            print(f"⚠️ Full summary generation failed: {e}")
-            # Fallback manual info
-            with open("data/processed/var_summary.txt", "w") as f:
-                f.write("VAR SUMMARY (manual fallback)\n")
-                f.write("=" * 50 + "\n")
-                f.write(f"Lags: {lags}\n")
-                f.write(f"Observations: {len(df)}\n")
-                f.write("Columns: " + ", ".join(df.columns) + "\n")
-                f.write("\nResidual covariance matrix:\n")
-                f.write(str(np.round(self.var_results.sigma_u_mle, 5)) + "\n")
-            print("✓ Fallback VAR summary written instead.")
+            print(f"✗ VAR model fitting failed: {e}")
+            raise
 
-    # ============================================================
-    # STEP 4: FORECAST + SAVE
-    # ============================================================
-    def forecast_factors(self, steps=6):
-        print("\n============================================================")
+        return self.var_results
+
+    # -------------------------------------------------------------------------
+    # 3) Forecast next N months
+    # -------------------------------------------------------------------------
+    def forecast_next(self, steps: int = 6):
+        """
+        Forecast next N months for all variables in the VAR.
+        Writes data/processed/var_forecast.csv and returns the DataFrame.
+        """
+        print("\n" + "=" * 60)
         print("FORECASTING FACTORS")
-        print("============================================================")
+        print("=" * 60)
+
         if self.var_results is None:
-            raise ValueError("VAR model must be fitted before forecasting.")
-        forecast = self.var_results.forecast(self.var_data.values[-self.var_results.k_ar:], steps)
-        forecast_df = pd.DataFrame(
-            forecast,
-            columns=self.var_data.columns,
-            index=pd.date_range(self.var_data.index[-1], periods=steps + 1, freq="M")[1:],
-        )
-        forecast_df.to_csv("data/processed/var_forecast.csv")
-        print(f"✓ Saved {steps}-month VAR forecast to data/processed/var_forecast.csv")
+            raise RuntimeError("Call estimate_var() before forecast_next().")
 
-    def calculate_expected_returns(self):
-        print("\n============================================================")
-        print("CALCULATING EXPECTED RETURNS (placeholder)")
-        print("============================================================")
-        # Future enhancement: link VAR forecasts to bond returns
+        res = self.var_results
+        # Determine the correct attribute for endog history
+        if hasattr(res, "endog"):
+            yhist = np.asarray(res.endog)
+        elif hasattr(res, "y"):
+            yhist = np.asarray(res.y)
+        else:
+            raise AttributeError("VARResults has neither .endog nor .y")
 
-    def plot_factors(self, save_path="data/processed/ns_factors.png"):
-        plt.figure(figsize=(10, 6))
-        self.ns_factors.plot(ax=plt.gca(), title="Nelson–Siegel Factors")
+        k = res.k_ar
+        last = yhist[-k:]
+
+        fc = res.forecast(y=last, steps=steps)
+        cols = res.names
+        # Forecast dates start one month after last available factor date
+        start_date = (self.ns_factors.index[-1] + pd.offsets.MonthEnd(1)).normalize()
+        idx = pd.date_range(start=start_date, periods=steps, freq="M")
+
+        out = pd.DataFrame(fc, columns=cols, index=idx)
+        out_csv = Path("data/processed/var_forecast.csv")
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(out_csv)
+        self.var_forecast = out
+
+        print(f"✓ Saved {steps}-month VAR forecast to {out_csv}")
+        return out
+
+    # -------------------------------------------------------------------------
+    # (Optional) Re-plot factors later without re-fitting
+    # -------------------------------------------------------------------------
+    def plot_factors(self, save_path: str = "output/figures/ns_factors.png"):
+        """Re-plot factors if they’re already computed."""
+        if self.ns_factors is None or self.ns_factors.empty:
+            raise RuntimeError("No factors to plot. Run extract_ns_factors() first.")
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.figure(figsize=(14, 5))
+        for col in ["Level", "Slope", "Curvature"]:
+            plt.plot(self.ns_factors.index, self.ns_factors[col], label=col)
+        plt.title("Nelson–Siegel Yield Curve Factors")
+        plt.xlabel("Date")
+        plt.ylabel("Factor Value")
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc="best")
         plt.tight_layout()
-        plt.savefig(save_path)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.close()
-
-    def save_results(self, output_dir="data/processed"):
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-        if self.ns_factors is not None:
-            self.ns_factors.to_csv(f"{output_dir}/ns_factors.csv")
-        if self.var_data is not None:
-            self.var_data.to_csv(f"{output_dir}/var_dataset.csv")
-        print(f"✓ Results saved to {output_dir}")
+        print(f"✓ Saved NS factors plot: {save_path}")

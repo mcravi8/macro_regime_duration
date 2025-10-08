@@ -1,13 +1,26 @@
+# OS / editor
+.DS_Store
+.vscode/
+.ipynb_checkpoints/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual env
 .venv/
-.ipynb_checkpoints/
-.env
+env/
+venv/
+
+# Data & outputs (keep CSVs if you want; usually don’t track large/raw)
 data/raw/
-data/processed/
-output/
-paper/final_paper.pdf
-presentation/slides.pptx
-presentation/slides.pdf
-.DS_Store
-.idea/
+data/processed/*.pkl
+output/figures/
+output/results/
+output/tables/
+
+# Logs
+*.log
