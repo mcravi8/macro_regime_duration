@@ -1,26 +1,52 @@
-# OS / editor
-.DS_Store
-.vscode/
-.ipynb_checkpoints/
-
-# Python
+# --- Python / OS cruft ---
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.pyd
+*.DS_Store
+.ipynb_checkpoints/
 *.egg-info/
-
-# Virtual env
+.env
 .venv/
-env/
 venv/
 
-# Data & outputs (keep CSVs if you want; usually don’t track large/raw)
-data/raw/
-data/processed/*.pkl
-output/figures/
-output/results/
-output/tables/
+# --- IDEs ---
+.vscode/
+.idea/
 
-# Logs
-*.log
+# --- Large data (ignored by default) ---
+data/raw/**
+data/processed/**
+# allow a few *small & useful* processed CSVs for reviewers:
+!data/processed/regime_probabilities.csv
+!data/processed/regime_labels.csv
+!data/processed/ns_factors.csv
+!data/processed/var_forecast.csv
+!data/processed/portfolio_weights.csv
+!data/processed/backtest_results.csv
+
+# --- Outputs (ignored by default) ---
+output/**
+# keep lightweight figures that demonstrate results:
+!output/figures/
+output/figures/**
+!output/figures/regime_probabilities.png
+!output/figures/regime_panels.png
+!output/figures/regime_scatter.png
+!output/figures/ns_factors.png
+!output/figures/portfolio_perf.png
+
+# keep a couple of tiny tables that summarize results:
+!output/tables/
+output/tables/**
+!output/tables/performance_metrics.csv
+!output/tables/regime_statistics.csv
+!output/tables/var_results.csv
+
+# keep folder structure even if empty
+!data/
+!output/
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!output/figures/.gitkeep
+!output/results/.gitkeep
+!output/tables/.gitkeep
