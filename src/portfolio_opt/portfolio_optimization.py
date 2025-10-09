@@ -285,6 +285,118 @@ class PortfolioOptimizer:
         return self.backtest_results
 
     # ---------------------------------------------------------------------
+    # Performance tables
+    # ---------------------------------------------------------------------
+    @staticmethod
+    def _annualize_mean(series: pd.Series) -> float:
+        return float(series.mean() * 12.0)
+
+    @staticmethod
+    def _annualize_vol(series: pd.Series) -> float:
+        return float(series.std(ddof=0) * np.sqrt(12.0))
+
+    @staticmethod
+    def _sharpe(series: pd.Series) -> float:
+        vol = series.std(ddof=0)
+        if vol <= 0 or np.isnan(vol):
+            return np.nan
+        return float(np.sqrt(12.0) * series.mean() / vol)
+
+    @staticmethod
+    def _max_drawdown_from_returns(rets: pd.Series) -> float:
+        curve = (1.0 + rets).cumprod()
+        dd = curve / curve.cummax() - 1.0
+        return float(dd.min())
+
+    def compute_and_save_performance(
+        self,
+        returns_outdir: str = "output/returns",
+        tables_outdir: str = "output/tables",
+    ):
+        """Compute overall & by-regime performance; save CSVs for README."""
+        if self.backtest_results.empty:
+            print("No backtest results — run backtest() first.")
+            return
+
+        Path(returns_outdir).mkdir(parents=True, exist_ok=True)
+        Path(tables_outdir).mkdir(parents=True, exist_ok=True)
+
+        # Dynamic (strategy) returns
+        dyn = self.backtest_results["return"].copy()
+        dyn.name = "return"
+        dyn_cum = (1.0 + dyn).cumprod()
+        pd.DataFrame({"return": dyn, "cumret": dyn_cum}).to_csv(
+            f"{returns_outdir}/dynamic_portfolio.csv", index_label="date"
+        )
+
+        # Simple benchmark: equal-weight across universe
+        eq_w = np.ones(len(self.universe)) / len(self.universe)
+        bench = (self.returns[self.universe] @ eq_w).reindex(dyn.index).fillna(0.0)
+        bench.name = "return"
+        bench_cum = (1.0 + bench).cumprod()
+        pd.DataFrame({"return": bench, "cumret": bench_cum}).to_csv(
+            f"{returns_outdir}/benchmark_portfolio.csv", index_label="date"
+        )
+
+        # Overall stats
+        summary = pd.DataFrame(
+            [
+                {
+                    "Series": "Strategy",
+                    "Mean Return (ann)": self._annualize_mean(dyn),
+                    "Volatility (ann)": self._annualize_vol(dyn),
+                    "Sharpe": self._sharpe(dyn),
+                    "Max Drawdown": self._max_drawdown_from_returns(dyn),
+                },
+                {
+                    "Series": "Equal-Weight Benchmark",
+                    "Mean Return (ann)": self._annualize_mean(bench),
+                    "Volatility (ann)": self._annualize_vol(bench),
+                    "Sharpe": self._sharpe(bench),
+                    "Max Drawdown": self._max_drawdown_from_returns(bench),
+                },
+            ]
+        )
+        summary["Sharpe Improvement"] = summary.loc[0, "Sharpe"] - summary.loc[1, "Sharpe"]
+        summary.to_csv(f"{tables_outdir}/portfolio_performance.csv", index=False)
+        print(f"✓ Saved overall performance → {tables_outdir}/portfolio_performance.csv")
+        print(summary.round(3).to_string(index=False))
+
+        # By-regime stats (using dominant regime)
+        regime_cols = [c for c in self.regime_probs.columns if c.startswith("Regime_")]
+        if regime_cols:
+            dominant = self.regime_probs[regime_cols].idxmax(axis=1).reindex(dyn.index)
+            # Map to readable labels if available
+            if self.regime_label_map:
+                name_map = {f"Regime_{k}": v for k, v in self.regime_label_map.items()}
+                dominant = dominant.map(name_map).fillna(dominant)
+        else:
+            # Fallback if labeled columns exist
+            lab_cols = [c for c in self.regime_probs.columns if c in ("Recession", "Moderate Growth", "Expansion")]
+            if lab_cols:
+                dominant = self.regime_probs[lab_cols].idxmax(axis=1).reindex(dyn.index)
+            else:
+                dominant = pd.Series(index=dyn.index, data="Unknown")
+
+        rows = []
+        for label, grp in dyn.groupby(dominant):
+            if grp.empty:
+                continue
+            rows.append(
+                {
+                    "Regime": str(label),
+                    "Obs": int(len(grp)),
+                    "Mean Return (ann)": self._annualize_mean(grp),
+                    "Volatility (ann)": self._annualize_vol(grp),
+                    "Sharpe": self._sharpe(grp),
+                    "Max Drawdown": self._max_drawdown_from_returns(grp),
+                }
+            )
+        by_regime = pd.DataFrame(rows).sort_values("Regime")
+        by_regime.to_csv(f"{tables_outdir}/performance_by_regime.csv", index=False)
+        print(f"✓ Saved by-regime performance → {tables_outdir}/performance_by_regime.csv")
+
+    # ---------------------------------------------------------------------
     # Plot & Save
     # ---------------------------------------------------------------------
     def plot_performance(self, path: str = "output/figures/portfolio_perf.png"):
@@ -324,6 +436,7 @@ def main():
     opt.load_data()
     opt.backtest()
     opt.plot_performance()
+    opt.compute_and_save_performance()  # NEW: save tables/returns for README
     opt.save_results()
     print("=" * 60)
     print("PORTFOLIO OPTIMIZATION COMPLETE")

@@ -105,7 +105,6 @@ def run_full_pipeline():
             lambda_init=config.YIELD_CURVE_CONFIG.get('lambda_init', 0.0609)
         )
         yc_model.estimate_var(lags=config.YIELD_CURVE_CONFIG['var_lags'])
-        # Statsmodels VAR uses last lags internally; our wrapper handles endog/y
         yc_model.forecast_next(steps=config.YIELD_CURVE_CONFIG['forecast_horizon'])
         print("✓ Yield curve modeling successful")
 
@@ -127,7 +126,6 @@ def run_full_pipeline():
         optimizer.load_data(
             returns_path=f"{config.PATHS['data_raw']}/treasury_returns.csv",
             regime_path=f"{config.PATHS['data_processed']}/regime_probabilities.csv",
-            # Use the standard saved outputs (don’t rely on extra config keys)
             forecast_path=f"{config.PATHS['data_processed']}/var_forecast.csv",
             regime_labels_path=f"{config.PATHS['data_processed']}/regime_labels.csv",
         )
@@ -136,6 +134,11 @@ def run_full_pipeline():
         )
         optimizer.plot_performance(
             path=f"{config.PATHS['output_figures']}/portfolio_performance.png"
+        )
+        # NEW: compute and save summary tables & returns CSVs for README and CV
+        optimizer.compute_and_save_performance(
+            returns_outdir=f"{config.PATHS['output_results'].rsplit('/',1)[0]}/returns".replace('results', 'returns'),
+            tables_outdir=f"{config.PATHS['output_tables']}",
         )
         optimizer.save_results(outdir=config.PATHS['data_processed'])
         print("✓ Portfolio optimization successful")
@@ -155,6 +158,8 @@ def run_full_pipeline():
     print("\nResults saved to:")
     print(f"  📊 Figures: {config.PATHS['output_figures']}/")
     print(f"  📁 Data: {config.PATHS['data_processed']}/")
+    print(f"  📑 Tables: {config.PATHS['output_tables']}/")
+    print("  📈 Returns CSVs: output/returns/ (for README plots)")
 
     return True
 
@@ -224,6 +229,10 @@ def run_portfolio_only():
     optimizer.plot_performance(
         path=f"{config.PATHS['output_figures']}/portfolio_performance.png"
     )
+    optimizer.compute_and_save_performance(
+        returns_outdir="output/returns",
+        tables_outdir=config.PATHS['output_tables'],
+    )
     optimizer.save_results(outdir=config.PATHS['data_processed'])
     print("✓ Portfolio optimization complete")
 
@@ -237,6 +246,8 @@ if __name__ == "__main__":
     # Ensure output directories exist
     Path(config.PATHS['output_figures']).mkdir(parents=True, exist_ok=True)
     Path(config.PATHS['output_results']).mkdir(parents=True, exist_ok=True)
+    Path(config.PATHS['output_tables']).mkdir(parents=True, exist_ok=True)
+    Path("output/returns").mkdir(parents=True, exist_ok=True)
     Path(config.PATHS['data_processed']).mkdir(parents=True, exist_ok=True)
 
     parser = argparse.ArgumentParser(
